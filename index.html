@@ -5,10 +5,268 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>招聘健康度看板</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  :root {
+    --bg: #f5f5f0;
+    --surface: #ffffff;
+    --border: rgba(0,0,0,0.08);
+    --text-primary: #1a1a1a;
+    --text-secondary: #666660;
+    --text-muted: #999994;
+    --red: #c0392b;
+    --red-bg: #fdf0ef;
+    --amber: #b45309;
+    --amber-bg: #fef3e2;
+    --green: #166534;
+    --green-bg: #f0fdf4;
+    --blue: #1d4ed8;
+    --blue-bg: #eff6ff;
+    --radius: 10px;
+    --radius-sm: 6px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-primary); font-size: 13px; min-height: 100vh; }
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; }
+  .header-title { font-size: 15px; font-weight: 600; }
+  .refresh-btn { background: none; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary); }
+  .refresh-btn:hover { background: var(--bg); }
+  .last-update { font-size: 11px; color: var(--text-muted); }
+  .loading-overlay { position: fixed; inset: 0; background: rgba(245,245,240,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 100; }
+  .spinner { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: #1d4ed8; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { font-size: 13px; color: var(--text-secondary); }
+  .error-banner { background: var(--red-bg); border: 1px solid rgba(192,57,43,0.2); border-radius: var(--radius-sm); padding: 10px 16px; margin: 12px 20px; font-size: 12px; color: var(--red); display: none; }
+  .dashboard { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+  .kpi-value { font-size: 32px; font-weight: 600; line-height: 1; }
+  .kpi-card.red .kpi-value { color: var(--red); }
+  .kpi-card.amber .kpi-value { color: var(--amber); }
+  .kpi-card.blue .kpi-value { color: var(--blue); }
+  .kpi-card.green .kpi-value { color: var(--green); }
+  .charts-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .card-title { font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+  .mid-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .bottom-row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; }
+  .status-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .status-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px; }
+  .status-item.warn { background: var(--red-bg); }
+  .status-item.watch { background: var(--amber-bg); }
+  .badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 20px; margin-left: 8px; }
+  .badge.warn { background: var(--red); color: #fff; }
+  .badge.watch { background: var(--amber); color: #fff; }
+  .job-name { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+  .reason-text { font-size: 11px; color: var(--text-muted); flex-shrink: 0; max-width: 140px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-secondary); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+</style>
 </head>
 <body>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text">正在读取最新招聘数据...</div>
+</div>
+
+<div class="header">
+  <div class="header-title">招聘健康度看板</div>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span class="last-update" id="last-update">--</span>
+    <button class="refresh-btn" onclick="loadData()">↻ 刷新</button>
+  </div>
+</div>
+
+<div class="error-banner" id="error-banner"></div>
+
+<div class="dashboard" id="dashboard" style="display:none;">
+  <div class="kpi-row">
+    <div class="kpi-card blue"><div class="kpi-label">正式岗位需求</div><div class="kpi-value" id="k-formal">-</div></div>
+    <div class="kpi-card"><div class="kpi-label">实习岗位需求</div><div class="kpi-value" id="k-intern">-</div></div>
+    <div class="kpi-card amber"><div class="kpi-label">关注岗位</div><div class="kpi-value" id="k-watch">-</div></div>
+    <div class="kpi-card red"><div class="kpi-label">预警岗位</div><div class="kpi-value" id="k-warn">-</div></div>
+  </div>
+  <div class="charts-row">
+    <div class="chart-card"><div class="card-title">各岗位面试中人选</div><div style="position:relative;height:180px;"><canvas id="c-interview" role="img" aria-label="面试中人数">面试中</canvas></div></div>
+    <div class="chart-card"><div class="card-title">各岗位 Offer 中人选</div><div style="position:relative;height:180px;"><canvas id="c-offer" role="img" aria-label="offer中人数">offer中</canvas></div></div>
+    <div class="chart-card"><div class="card-title">各岗位待入职人选</div><div style="position:relative;height:180px;"><canvas id="c-onboard" role="img" aria-label="待入职人数">待入职</canvas></div></div>
+  </div>
+  <div class="mid-row">
+    <div class="kpi-card"><div class="kpi-label">在途简历总数</div><div class="kpi-value" id="k-total">-</div></div>
+    <div class="kpi-card green"><div class="kpi-label">面试中总人数</div><div class="kpi-value" id="k-interview">-</div></div>
+    <div class="kpi-card amber"><div class="kpi-label">Offer 中总人数</div><div class="kpi-value" id="k-offer">-</div></div>
+    <div class="kpi-card blue"><div class="kpi-label">待入职总人数</div><div class="kpi-value" id="k-pending">-</div></div>
+  </div>
+  <div class="bottom-row">
+    <div class="chart-card">
+      <div class="card-title">各阶段人选分布</div>
+      <div class="legend" id="stage-legend"></div>
+      <div style="position:relative;height:180px;"><canvas id="c-stage" role="img" aria-label="阶段分布">阶段分布</canvas></div>
+    </div>
+    <div class="chart-card"><div class="card-title">预警岗位</div><div class="status-list" id="warn-list"></div></div>
+    <div class="chart-card"><div class="card-title">关注岗位</div><div class="status-list" id="watch-list"></div></div>
+  </div>
+</div>
+
 <script>
-  window.location.href = "recruit_dashboard.html";
+const APP_ID = "cli_aaa38cd208789bb4";
+const APP_SECRET = "WhRA4vz5dcZ7k81Gh1T5xfoZXtRCBJyB";
+const APP_TOKEN = "F8FabYLgHa3G0As9fxtczoHNnfd";
+const TABLE_ID = "tblpTDdNS15G8XrH";
+const BASE = "https://open.feishu.cn/open-apis";
+let charts = {};
+
+function cv(v) {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v[0]?.text || "";
+  if (typeof v === "object") return v.text || "";
+  return String(v);
+}
+function cn(f, k) {
+  const v = f[k];
+  if (v == null) return 0;
+  if (typeof v === "number") return Math.round(v);
+  const s = cv(v).trim();
+  return s === "" ? 0 : (parseInt(parseFloat(s)) || 0);
+}
+function shortName(n) { return n.length > 7 ? n.slice(0, 6) + "…" : n; }
+
+async function getToken() {
+  const r = await fetch(`${BASE}/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET })
+  });
+  const d = await r.json();
+  if (!d.tenant_access_token) throw new Error("获取token失败");
+  return d.tenant_access_token;
+}
+
+async function getRecords(token) {
+  let items = [], pageToken = null;
+  while (true) {
+    const body = { page_size: 100 };
+    if (pageToken) body.page_token = pageToken;
+    const r = await fetch(`${BASE}/bitable/v1/apps/${APP_TOKEN}/tables/${TABLE_ID}/records/search`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (d.code !== 0) throw new Error("读取表格失败：" + d.msg);
+    items = items.concat(d.data.items || []);
+    if (!d.data.has_more) break;
+    pageToken = d.data.page_token;
+  }
+  return items;
+}
+
+function makeHBar(id, labels, vals, color) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), {
+    type: "bar",
+    data: { labels: labels.map(shortName), datasets: [{ data: vals, backgroundColor: color, borderRadius: 3, borderSkipped: false }] },
+    options: {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { font: { size: 10 }, color: "#999994" }, grid: { color: "rgba(0,0,0,0.05)" } },
+        y: { ticks: { font: { size: 10 }, color: "#666660" }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+function renderDashboard(rows) {
+  document.getElementById("k-formal").textContent = rows.filter(r => !r.name.includes("实习")).length;
+  document.getElementById("k-intern").textContent = rows.filter(r => r.name.includes("实习")).length;
+  const warns = rows.filter(r => r.health === "预警");
+  const watches = rows.filter(r => r.health === "关注");
+  document.getElementById("k-warn").textContent = warns.length;
+  document.getElementById("k-watch").textContent = watches.length;
+  document.getElementById("k-total").textContent = rows.reduce((s,r) => s+r.在投, 0);
+  document.getElementById("k-interview").textContent = rows.reduce((s,r) => s+r.面试, 0);
+  document.getElementById("k-offer").textContent = rows.reduce((s,r) => s+r.offer, 0);
+  document.getElementById("k-pending").textContent = rows.reduce((s,r) => s+r.待入职, 0);
+
+  const hi = rows.filter(r => r.面试 > 0);
+  const ho = rows.filter(r => r.offer > 0);
+  const hp = rows.filter(r => r.待入职 > 0);
+  if (hi.length) makeHBar("c-interview", hi.map(r=>r.name), hi.map(r=>r.面试), "#6d28d9");
+  if (ho.length) makeHBar("c-offer", ho.map(r=>r.name), ho.map(r=>r.offer), "#166534");
+  if (hp.length) makeHBar("c-onboard", hp.map(r=>r.name), hp.map(r=>r.待入职), "#b45309");
+
+  const stageColors = ["#1d4ed8","#166534","#6d28d9","#b45309","#c0392b"];
+  const stageNames = ["筛选","评估","面试","Offer","待入职"];
+  document.getElementById("stage-legend").innerHTML = stageNames.map((n,i) =>
+    `<span class="legend-item"><span class="legend-dot" style="background:${stageColors[i]}"></span>${n}</span>`).join("");
+
+  const top = rows.slice(0, 8);
+  if (charts["c-stage"]) charts["c-stage"].destroy();
+  charts["c-stage"] = new Chart(document.getElementById("c-stage"), {
+    type: "bar",
+    data: {
+      labels: top.map(r => shortName(r.name)),
+      datasets: stageNames.map((n,i) => ({
+        label: n, data: top.map(r => [r.筛选,r.评估,r.面试,r.offer,r.待入职][i]),
+        backgroundColor: stageColors[i], borderRadius: 0
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { stacked: true, ticks: { font: { size: 10 }, color: "#999994" }, grid: { display: false } },
+        y: { stacked: true, ticks: { font: { size: 10 }, color: "#666660" }, grid: { color: "rgba(0,0,0,0.05)" } }
+      }
+    }
+  });
+
+  document.getElementById("warn-list").innerHTML = warns.length
+    ? warns.map(r => `<div class="status-item warn"><span class="job-name">${r.name}</span><span class="reason-text">${r.reason}</span><span class="badge warn">预警</span></div>`).join("")
+    : `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">暂无预警岗位</div>`;
+  document.getElementById("watch-list").innerHTML = watches.length
+    ? watches.map(r => `<div class="status-item watch"><span class="job-name">${r.name}</span><span class="reason-text">${r.reason}</span><span class="badge watch">关注</span></div>`).join("")
+    : `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">暂无关注岗位</div>`;
+
+  const now = new Date();
+  document.getElementById("last-update").textContent = `更新于 ${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}`;
+}
+
+async function loadData() {
+  document.getElementById("loading").style.display = "flex";
+  document.getElementById("dashboard").style.display = "none";
+  document.getElementById("error-banner").style.display = "none";
+  try {
+    const token = await getToken();
+    const records = await getRecords(token);
+    const rows = records.map(rec => {
+      const f = rec.fields;
+      return {
+        name: cv(f["岗位名称"]) || "未知",
+        health: cv(f["健康度"]),
+        reason: cv(f["预警原因"]),
+        筛选: cn(f,"筛选"), 评估: cn(f,"评估"), 面试: cn(f,"面试"),
+        offer: cn(f,"Offer"), 待入职: cn(f,"待入职"), 已入职: cn(f,"已入职"),
+        在投: cn(f,"在投简历数"),
+      };
+    }).filter(r => r.name !== "未知");
+    renderDashboard(rows);
+    document.getElementById("dashboard").style.display = "flex";
+  } catch(e) {
+    const el = document.getElementById("error-banner");
+    el.textContent = "⚠ " + e.message;
+    el.style.display = "block";
+    document.getElementById("dashboard").style.display = "flex";
+  } finally {
+    document.getElementById("loading").style.display = "none";
+  }
+}
+
+loadData();
+setInterval(loadData, 15 * 60 * 1000);
 </script>
 </body>
 </html>
